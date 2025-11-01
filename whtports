@@ -11,7 +11,7 @@ CACHE_DIR = os.path.expanduser("~/.cache/whtports")
 CACHE_FILE = os.path.join(CACHE_DIR, "iana_ports.json")
 
 def download_iana():
-    """Скачивает и парсит список портов с IANA"""
+    """Скачивает и сохраняет полные данные о портах"""
     url = "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.csv"
     try:
         print("Загрузка данных с IANA...", file=sys.stderr)
@@ -21,20 +21,21 @@ def download_iana():
         if not lines:
             return {}
 
-        # Парсим заголовок
         headers = [h.strip() for h in lines[0].split(',')]
         try:
             port_col = headers.index("Port Number")
+            proto_col = headers.index("Transport Protocol")
             name_col = headers.index("Service Name")
             desc_col = headers.index("Description")
         except ValueError:
-            # Резервный порядок столбцов (на случай изменений)
-            port_col, name_col, desc_col = 1, 0, 3
+            # Резерв: известные позиции
+            port_col, proto_col, name_col, desc_col = 1, 2, 0, 3
 
         port_map = {}
         for line in lines[1:]:
             cols = [c.strip() for c in line.split(',')]
-            if len(cols) <= max(port_col, name_col, desc_col):
+            max_idx = max(port_col, proto_col, name_col, desc_col)
+            if len(cols) <= max_idx:
                 continue
 
             port_str = cols[port_col]
@@ -42,12 +43,22 @@ def download_iana():
                 continue
 
             port = int(port_str)
-            if port < 0 or port > 65535:
+            if not (0 <= port <= 65535):
                 continue
 
-            service_name = cols[name_col] or cols[desc_col]
-            if service_name and port not in port_map:
-                port_map[port] = service_name
+            proto = cols[proto_col] if proto_col < len(cols) else ""
+            name = cols[name_col] if name_col < len(cols) else ""
+            desc = cols[desc_col] if desc_col < len(cols) else ""
+
+            # Сохраняем ВСЕ записи (даже без имени/описания)
+            if port not in port_map:
+                port_map[port] = []
+
+            port_map[port].append({
+                "protocol": proto.lower() if proto else "any",
+                "name": name,
+                "description": desc
+            })
 
         return port_map
     except Exception as e:
@@ -83,8 +94,7 @@ def cache_is_too_old(max_age_days=7):
         return True
 
 def google_url(port):
-    """Возвращает ссылку на поиск в Google"""
-    return f"https://www.google.com/search?q={quote_plus(f'port {port} service')}"
+    return f"https://www.google.com/search?q=port+{port}+IANA+assignment"
 
 def main():
     if len(sys.argv) != 2 or not sys.argv[1].isdigit():
@@ -96,27 +106,32 @@ def main():
         print("Ошибка: порт должен быть в диапазоне 0–65535", file=sys.stderr)
         sys.exit(1)
 
-    # Загружаем кэш
     data = load_cache()
-
-    # Обновляем, если кэш пустой или устарел
     if not data or cache_is_too_old(max_age_days=7):
         fresh_data = download_iana()
-        if fresh_data:
-            data = fresh_data
+        if fresh_
+            data = fresh_
             save_cache(data)
         else:
-            print("Не удалось обновить базу портов.", file=sys.stderr)
-            print("Рекомендуем поискать вручную:")
-            print(google_url(port))
+            print("Не удалось обновить базу.", file=sys.stderr)
+            print("Поиск в Google:", google_url(port))
             sys.exit(1)
 
-    # Поиск порта
-    if port in data:
-        print(f"Порт {port}: {data[port]}")
+    if port in 
+        records = data[port]
+        print(f"Порт {port}:")
+        for rec in records:
+            parts = []
+            if rec["name"]:
+                parts.append(rec["name"])
+            if rec["description"]:
+                parts.append(f"({rec['description']})")
+            proto_info = f"[{rec['protocol'].upper()}]" if rec["protocol"] != "any" else ""
+            line = " ".join(parts) if parts else "Нет данных о назначении"
+            print(f"  {proto_info} {line}".strip())
     else:
-        print(f"Порт {port} не найден в официальной базе IANA.")
-        print("Попробуйте поискать в Google:")
+        print(f"Порт {port} не зарегистрирован в официальной базе IANA.")
+        print("Рекомендуем поискать:")
         print(google_url(port))
 
 if __name__ == "__main__":
