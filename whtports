@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+import sys
+import os
+import json
+import time
+import requests
+from urllib.parse import quote_plus
+
+# Пути к кэшу
+CACHE_DIR = os.path.expanduser("~/.cache/whtports")
+CACHE_FILE = os.path.join(CACHE_DIR, "iana_ports.json")
+
+def download_iana():
+    """Скачивает и парсит список портов с IANA"""
+    url = "https://www.iana.org/assignments/service-names-port-numbers/service-names-port-numbers.csv"
+    try:
+        print("Загрузка данных с IANA...", file=sys.stderr)
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        lines = resp.text.splitlines()
+        if not lines:
+            return {}
+
+        # Парсим заголовок
+        headers = [h.strip() for h in lines[0].split(',')]
+        try:
+            port_col = headers.index("Port Number")
+            name_col = headers.index("Service Name")
+            desc_col = headers.index("Description")
+        except ValueError:
+            # Резервный порядок столбцов (на случай изменений)
+            port_col, name_col, desc_col = 1, 0, 3
+
+        port_map = {}
+        for line in lines[1:]:
+            cols = [c.strip() for c in line.split(',')]
+            if len(cols) <= max(port_col, name_col, desc_col):
+                continue
+
+            port_str = cols[port_col]
+            if not port_str or '-' in port_str or not port_str.isdigit():
+                continue
+
+            port = int(port_str)
+            if port < 0 or port > 65535:
+                continue
+
+            service_name = cols[name_col] or cols[desc_col]
+            if service_name and port not in port_map:
+                port_map[port] = service_name
+
+        return port_map
+    except Exception as e:
+        print(f"Ошибка при загрузке IANA: {e}", file=sys.stderr)
+        return {}
+
+def load_cache():
+    """Загружает кэш и преобразует ключи в int"""
+    if not os.path.exists(CACHE_FILE):
+        return {}
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {int(k): v for k, v in raw.items() if str(k).isdigit()}
+    except Exception as e:
+        print(f"Ошибка загрузки кэша: {e}", file=sys.stderr)
+        return {}
+
+def save_cache(data):
+    """Сохраняет данные в кэш"""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    with open(CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def cache_is_too_old(max_age_days=7):
+    """Проверяет, старше ли кэш заданного числа дней"""
+    if not os.path.exists(CACHE_FILE):
+        return True
+    try:
+        age_seconds = time.time() - os.path.getmtime(CACHE_FILE)
+        return age_seconds > (max_age_days * 24 * 60 * 60)
+    except (OSError, ValueError):
+        return True
+
+def google_url(port):
+    """Возвращает ссылку на поиск в Google"""
+    return f"https://www.google.com/search?q={quote_plus(f'port {port} service')}"
+
+def main():
+    if len(sys.argv) != 2 or not sys.argv[1].isdigit():
+        print("Использование: whtports <номер_порта>", file=sys.stderr)
+        sys.exit(1)
+
+    port = int(sys.argv[1])
+    if not (0 <= port <= 65535):
+        print("Ошибка: порт должен быть в диапазоне 0–65535", file=sys.stderr)
+        sys.exit(1)
+
+    # Загружаем кэш
+    data = load_cache()
+
+    # Обновляем, если кэш пустой или устарел
+    if not data or cache_is_too_old(max_age_days=7):
+        fresh_data = download_iana()
+        if fresh_data:
+            data = fresh_data
+            save_cache(data)
+        else:
+            print("Не удалось обновить базу портов.", file=sys.stderr)
+            print("Рекомендуем поискать вручную:")
+            print(google_url(port))
+            sys.exit(1)
+
+    # Поиск порта
+    if port in data:
+        print(f"Порт {port}: {data[port]}")
+    else:
+        print(f"Порт {port} не найден в официальной базе IANA.")
+        print("Попробуйте поискать в Google:")
+        print(google_url(port))
+
+if __name__ == "__main__":
+    main()
